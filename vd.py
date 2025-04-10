@@ -94,7 +94,7 @@ def run_websocket(api_key, ticker, delta_calculator):
     client.subscribe(f"Q.{ticker}")
     client.run(lambda msgs: handle_message(msgs, delta_calculator))
 
-# --- curses-based Main UI ---
+# --- curses-based Main UI that only displays the most recent max_lines with color preserved ---
 def curses_main(stdscr):
     # Configure curses
     curses.curs_set(0)
@@ -102,7 +102,7 @@ def curses_main(stdscr):
     stdscr.clear()
     curses.start_color()
     curses.use_default_colors()
-    # Define color pairs: pair 1 for positive (yellow), pair 2 for negative (red)
+    # Define color pairs: pair 1 for positive (green), pair 2 for negative (yellow)
     curses.init_pair(1, curses.COLOR_GREEN, -1)
     curses.init_pair(2, curses.COLOR_YELLOW, -1)
 
@@ -110,9 +110,16 @@ def curses_main(stdscr):
     ws_thread = threading.Thread(target=run_websocket, args=(API_KEY, TICKER, delta_calculator), daemon=True)
     ws_thread.start()
 
-    field_width = 10  # Fixed field width for numeric columns
+    field_width = 10  # fixed field width for numeric columns
+    max_lines = 5     # maximum number of finalized lines to display
 
-    # Initial alignment: wait until the next multiple of 5 seconds
+    # This list holds finalized output tuples: (line, color)
+    display_lines = []
+
+    # Get terminal dimensions
+    height, width = stdscr.getmaxyx()
+
+    # Initial alignment: wait until the next multiple of 5 seconds.
     now = time.time()
     if now % 5 != 0:
         start_time = ((int(now) // 5) + 1) * 5
@@ -120,62 +127,63 @@ def curses_main(stdscr):
     else:
         start_time = now
 
-    current_row = 0
-    height, width = stdscr.getmaxyx()
-
     # Main loop: each iteration covers one 5-second window.
     while True:
         window_time_str = datetime.fromtimestamp(start_time).strftime("(%M:%S)")
         end_time = start_time + 5
 
-        # Update the display on the current_row until the window ends.
+        current_update = ""  # live update for the current window
+        current_color = curses.A_NORMAL
+
+        # Live update loop until window ends.
         while time.time() < end_time:
             volume_delta, ask_vol, bid_vol = delta_calculator.get_volume_delta()
             raw_delta = f"{volume_delta:>{field_width},}"
-            raw_ask = f"{ask_vol:>{field_width},}"
-            raw_bid = f"{bid_vol:>{field_width},}"
+            raw_ask   = f"{ask_vol:>{field_width},}"
+            raw_bid   = f"{bid_vol:>{field_width},}"
 
-            # Choose color based on volume_delta
             if volume_delta > 0:
-                color = curses.color_pair(1)
+                current_color = curses.color_pair(1)
             elif volume_delta < 0:
-                color = curses.color_pair(2)
+                current_color = curses.color_pair(2)
             else:
-                color = curses.A_NORMAL
+                current_color = curses.A_NORMAL
 
-            output_str = f"vd {window_time_str}:{raw_delta}  |  Buy:{raw_ask}  |  Sell:{raw_bid}"
-            # Clear the line and write the updated string at current_row
-            stdscr.move(current_row, 0)
-            stdscr.clrtoeol()
-            stdscr.addstr(current_row, 0, output_str.ljust(width), color)
+            current_update = f"vd {window_time_str}:{raw_delta}  |  Buy:{raw_ask}  |  Sell:{raw_bid}"
+            stdscr.erase()
+            # Draw each previously finalized line with its stored color.
+            for idx, (line, col) in enumerate(display_lines):
+                stdscr.addstr(idx, 0, line.ljust(width), col)
+            # Draw the current live update on the line after the stored lines.
+            stdscr.addstr(len(display_lines), 0, current_update.ljust(width), current_color)
             stdscr.refresh()
             time.sleep(0.2)
 
-        # End of window: print the final output on the current_row
+        # End of window: compute the final string and store it with its color.
         volume_delta, ask_vol, bid_vol = delta_calculator.get_volume_delta()
         raw_delta = f"{volume_delta:>{field_width},}"
-        raw_ask = f"{ask_vol:>{field_width},}"
-        raw_bid = f"{bid_vol:>{field_width},}"
+        raw_ask   = f"{ask_vol:>{field_width},}"
+        raw_bid   = f"{bid_vol:>{field_width},}"
         if volume_delta > 0:
-            color = curses.color_pair(1)
+            final_color = curses.color_pair(1)
         elif volume_delta < 0:
-            color = curses.color_pair(2)
+            final_color = curses.color_pair(2)
         else:
-            color = curses.A_NORMAL
+            final_color = curses.A_NORMAL
         final_str = f"vd {window_time_str}:{raw_delta}  |  Buy:{raw_ask}  |  Sell:{raw_bid}"
-        stdscr.move(current_row, 0)
-        stdscr.clrtoeol()
-        stdscr.addstr(current_row, 0, final_str.ljust(width), color)
-        stdscr.refresh()
+        # Append the finalized string and its color.
+        display_lines.append((final_str, final_color))
+        if len(display_lines) > max_lines:
+            display_lines.pop(0)
         delta_calculator.reset()
 
-        # Advance to the next line for the next window's final output.
-        current_row += 1
-        if current_row >= height:
-            stdscr.scroll(1)
-            current_row = height - 1
+        # Redraw the finalized lines.
+        stdscr.erase()
+        for idx, (line, col) in enumerate(display_lines):
+            stdscr.addstr(idx, 0, line.ljust(width), col)
+        stdscr.refresh()
 
-        # Set the next window's start_time to the previous window's end_time.
+        # Set the next window's start time.
         start_time = end_time
         now = time.time()
         if now < start_time:
@@ -185,6 +193,5 @@ if __name__ == "__main__":
     try:
         curses.wrapper(curses_main)
     except KeyboardInterrupt:
-        # When curses is active, it's best to end curses cleanly.
         curses.endwin()
         print("\nProgram terminated by user.")
