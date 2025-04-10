@@ -8,8 +8,6 @@ import curses
 
 from polygon import WebSocketClient
 from polygon.websocket.models import EquityTrade, EquityQuote
-# We no longer use termcolor since curses handles color
-
 from dotenv import load_dotenv
 
 # Load .env file if it exists, without overriding existing environment variables
@@ -88,11 +86,35 @@ def handle_message(msgs, delta_calculator):
         elif isinstance(msg, EquityQuote):
             delta_calculator.update_quote(msg)
 
+# --- WebSocket Connection with Retry ---
 def run_websocket(api_key, ticker, delta_calculator):
-    client = WebSocketClient(api_key=api_key)
-    client.subscribe(f"T.{ticker}")
-    client.subscribe(f"Q.{ticker}")
-    client.run(lambda msgs: handle_message(msgs, delta_calculator))
+    # Configure retry parameters similar to ticksonic.
+    max_retries = 3
+    delay = 10  # seconds to wait before retrying
+    remaining_retries = max_retries
+
+    while True:
+        try:
+            client = WebSocketClient(api_key=api_key)
+            client.subscribe(f"T.{ticker}")
+            client.subscribe(f"Q.{ticker}")
+            client.run(lambda msgs: handle_message(msgs, delta_calculator))
+            # If the client ends gracefully, reset retry counter:
+            print("WebSocket client ended or disconnected gracefully.")
+            remaining_retries = max_retries
+
+        except KeyboardInterrupt:
+            print("KeyboardInterrupt detected. Shutting down gracefully.")
+            break
+
+        except Exception as e:
+            remaining_retries -= 1
+            if remaining_retries > 0:
+                print(f"WebSocket encountered an error: {e}. Retrying in {delay} seconds... (Remaining retries: {remaining_retries})")
+                time.sleep(delay)
+            else:
+                print(f"WebSocket encountered an error: {e}. No more retries left. Shutting down gracefully.")
+                break
 
 # --- curses-based Main UI that only displays the most recent max_lines with color preserved ---
 def curses_main(stdscr):
@@ -111,7 +133,7 @@ def curses_main(stdscr):
     ws_thread.start()
 
     field_width = 10  # fixed field width for numeric columns
-    max_lines = 5     # maximum number of finalized lines to display
+    max_lines = 4     # maximum number of finalized lines to display
 
     # This list holds finalized output tuples: (line, color)
     display_lines = []
