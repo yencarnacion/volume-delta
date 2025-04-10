@@ -1,0 +1,21 @@
+[project]
+name = "volume-delta"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Yamir Encarnacion"}
+]
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "polygon-api-client (>=1.14.3,<2.0.0)",
+    "termcolor (>=2.5.0,<3.0.0)",
+    "python-dotenv (>=1.1.0,<2.0.0)",
+]
+
+[tool.poetry]
+package-mode = false
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
