@@ -51,3 +51,8 @@
 
 
 If you *already* ran `poetry install` sometime earlier (and nothing changed in `pyproject.toml`), you should be able to directly run the script using the same `poetry run ...` command without reinstalling. 
+
+5. **Windows**
+   ```bash
+   poetry add windows-curses
+   ```
