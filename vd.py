@@ -103,8 +103,8 @@ def curses_main(stdscr):
     curses.start_color()
     curses.use_default_colors()
     # Define color pairs: pair 1 for positive (yellow), pair 2 for negative (red)
-    curses.init_pair(1, curses.COLOR_YELLOW, -1)
-    curses.init_pair(2, curses.COLOR_RED, -1)
+    curses.init_pair(1, curses.COLOR_GREEN, -1)
+    curses.init_pair(2, curses.COLOR_YELLOW, -1)
 
     delta_calculator = VolumeDeltaCalculator(TICKER)
     ws_thread = threading.Thread(target=run_websocket, args=(API_KEY, TICKER, delta_calculator), daemon=True)
