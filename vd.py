@@ -4,10 +4,11 @@ import sys
 import time
 import threading
 from datetime import datetime
+import curses
 
 from polygon import WebSocketClient
 from polygon.websocket.models import EquityTrade, EquityQuote
-from termcolor import colored
+# We no longer use termcolor since curses handles color
 
 from dotenv import load_dotenv
 
@@ -15,14 +16,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Configuration ---
-# Replace with your Polygon API key or set the POLYGON_API_KEY environment variable
 API_KEY = os.getenv('POLYGON_API_KEY', 'YOUR_API_KEY_HERE')
-
-# Get the ticker from the command-line arguments.
 if len(sys.argv) < 2:
     print(f"Usage: {sys.argv[0]} STOCK_TICKER")
     sys.exit(1)
-TICKER = sys.argv[1].upper()  # Convert to uppercase to meet API requirements.
+TICKER = sys.argv[1].upper()
 
 # --- Volume Delta Calculator Class ---
 class VolumeDeltaCalculator:
@@ -31,7 +29,7 @@ class VolumeDeltaCalculator:
         self.lock = threading.Lock()
         self.ask_volume = 0
         self.bid_volume = 0
-        self.latest_quote = None  # Stored as dict: {"bid": value, "ask": value}
+        self.latest_quote = None  # Dict: {"bid": value, "ask": value}
 
     def update_quote(self, quote):
         if quote.symbol.upper() != self.ticker:
@@ -65,7 +63,6 @@ class VolumeDeltaCalculator:
             with self.lock:
                 self.bid_volume += volume
         else:
-            # In-between trade: decide based on proximity.
             if abs(price - ask) < abs(price - bid):
                 with self.lock:
                     self.ask_volume += volume
@@ -83,7 +80,7 @@ class VolumeDeltaCalculator:
             self.ask_volume = 0
             self.bid_volume = 0
 
-# --- Polygon WebSocket Message Handler ---
+# --- WebSocket Message Handler ---
 def handle_message(msgs, delta_calculator):
     for msg in msgs:
         if isinstance(msg, EquityTrade):
@@ -91,26 +88,31 @@ def handle_message(msgs, delta_calculator):
         elif isinstance(msg, EquityQuote):
             delta_calculator.update_quote(msg)
 
-# Start the websocket client.
 def run_websocket(api_key, ticker, delta_calculator):
     client = WebSocketClient(api_key=api_key)
     client.subscribe(f"T.{ticker}")
     client.subscribe(f"Q.{ticker}")
     client.run(lambda msgs: handle_message(msgs, delta_calculator))
 
-# --- Main Loop ---
-#
-# Instead of using a helper to wait for a boundary, we now compute the next
-# window start explicitly. This ensures that every window (multiples of 5 seconds)
-# is always used.
-def main():
+# --- curses-based Main UI ---
+def curses_main(stdscr):
+    # Configure curses
+    curses.curs_set(0)
+    stdscr.nodelay(True)
+    stdscr.clear()
+    curses.start_color()
+    curses.use_default_colors()
+    # Define color pairs: pair 1 for positive (yellow), pair 2 for negative (red)
+    curses.init_pair(1, curses.COLOR_YELLOW, -1)
+    curses.init_pair(2, curses.COLOR_RED, -1)
+
     delta_calculator = VolumeDeltaCalculator(TICKER)
     ws_thread = threading.Thread(target=run_websocket, args=(API_KEY, TICKER, delta_calculator), daemon=True)
     ws_thread.start()
 
-    field_width = 10  # fixed field width for output alignment
+    field_width = 10  # Fixed field width for numeric columns
 
-    # Initial alignment: compute the next multiple of 5 seconds.
+    # Initial alignment: wait until the next multiple of 5 seconds
     now = time.time()
     if now % 5 != 0:
         start_time = ((int(now) // 5) + 1) * 5
@@ -118,54 +120,71 @@ def main():
     else:
         start_time = now
 
+    current_row = 0
+    height, width = stdscr.getmaxyx()
+
     # Main loop: each iteration covers one 5-second window.
     while True:
         window_time_str = datetime.fromtimestamp(start_time).strftime("(%M:%S)")
         end_time = start_time + 5
 
-        # Update the display until the window ends.
+        # Update the display on the current_row until the window ends.
         while time.time() < end_time:
             volume_delta, ask_vol, bid_vol = delta_calculator.get_volume_delta()
             raw_delta = f"{volume_delta:>{field_width},}"
             raw_ask = f"{ask_vol:>{field_width},}"
             raw_bid = f"{bid_vol:>{field_width},}"
 
+            # Choose color based on volume_delta
             if volume_delta > 0:
-                colored_delta = colored(raw_delta, 'yellow')
+                color = curses.color_pair(1)
             elif volume_delta < 0:
-                colored_delta = colored(raw_delta, 'red')
+                color = curses.color_pair(2)
             else:
-                colored_delta = raw_delta
+                color = curses.A_NORMAL
 
-            output_str = f"\rvd {window_time_str}:{colored_delta}  |  Buy:{raw_ask}  |  Sell:{raw_bid}"
-            print(output_str, end='', flush=True)
-            time.sleep(0.2)  # refresh rate
+            output_str = f"vd {window_time_str}:{raw_delta}  |  Buy:{raw_ask}  |  Sell:{raw_bid}"
+            # Clear the line and write the updated string at current_row
+            stdscr.move(current_row, 0)
+            stdscr.clrtoeol()
+            stdscr.addstr(current_row, 0, output_str.ljust(width), color)
+            stdscr.refresh()
+            time.sleep(0.2)
 
-        # End of window: print final output and reset counters.
+        # End of window: print the final output on the current_row
         volume_delta, ask_vol, bid_vol = delta_calculator.get_volume_delta()
         raw_delta = f"{volume_delta:>{field_width},}"
         raw_ask = f"{ask_vol:>{field_width},}"
         raw_bid = f"{bid_vol:>{field_width},}"
-
         if volume_delta > 0:
-            colored_delta = colored(raw_delta, 'yellow')
+            color = curses.color_pair(1)
         elif volume_delta < 0:
-            colored_delta = colored(raw_delta, 'red')
+            color = curses.color_pair(2)
         else:
-            colored_delta = raw_delta
-
-        print(f"\rvd {window_time_str}:{colored_delta}  |  Buy:{raw_ask}  |  Sell:{raw_bid}")
+            color = curses.A_NORMAL
+        final_str = f"vd {window_time_str}:{raw_delta}  |  Buy:{raw_ask}  |  Sell:{raw_bid}"
+        stdscr.move(current_row, 0)
+        stdscr.clrtoeol()
+        stdscr.addstr(current_row, 0, final_str.ljust(width), color)
+        stdscr.refresh()
         delta_calculator.reset()
 
-        # Set the start time for the next window to exactly end_time.
+        # Advance to the next line for the next window's final output.
+        current_row += 1
+        if current_row >= height:
+            stdscr.scroll(1)
+            current_row = height - 1
+
+        # Set the next window's start_time to the previous window's end_time.
         start_time = end_time
-        # If processing was very fast and we're ahead of time, wait until the next boundary.
         now = time.time()
         if now < start_time:
             time.sleep(start_time - now)
 
 if __name__ == "__main__":
     try:
-        main()
+        curses.wrapper(curses_main)
     except KeyboardInterrupt:
+        # When curses is active, it's best to end curses cleanly.
+        curses.endwin()
         print("\nProgram terminated by user.")
